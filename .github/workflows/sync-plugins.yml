@@ -1,26 +1,36 @@
 name: Sync all-the-plugins → applications_user
 
 on:
-  # ręcznie z Actions
   workflow_dispatch: {}
-  # auto: nasłuch na event z drugiego repo
   repository_dispatch:
     types: [sync-plugins]
-  # opcjonalnie: safety-net raz dziennie
-  schedule:
-    - cron: "15 4 * * *"
 
 permissions:
   contents: write
+
+env:
+  # Domyślna gałąź docelowa (zmienisz eventem repo_dispatch)
+  TARGET_BRANCH: unl_dev_all_apps
 
 jobs:
   sync:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout target (unleashed-firmware@dev)
+      - name: Resolve target branch from dispatch payload
+        id: resolve
+        run: |
+          # jeśli przyszło z repository_dispatch, weź branch z payloadu
+          if [ -n "${{ github.event.client_payload.branch }}" ]; then
+            echo "branch=${{ github.event.client_payload.branch }}" >> $GITHUB_OUTPUT
+          else
+            echo "branch=${TARGET_BRANCH}" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Checkout target (unleashed-firmware@${{ steps.resolve.outputs.branch }})
         uses: actions/checkout@v4
         with:
-          ref: dev
+          ref: ${{ steps.resolve.outputs.branch }}
+          fetch-depth: 0
 
       - name: Checkout source (all-the-plugins@dev)
         uses: actions/checkout@v4
@@ -28,32 +38,42 @@ jobs:
           repository: JackSicStar/all-the-plugins
           ref: dev
           path: source_plugins
+          fetch-depth: 0
+
+      - name: Prepare applications_user
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p applications_user
+          # KILLER: usuń .gitignore, który blokuje śledzenie plików
+          rm -f applications_user/.gitignore
 
       - name: Copy apps into applications_user
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p applications_user
           shopt -s dotglob nullglob
-          for d in \
-            source_plugins/apps_source_code/* \
-            source_plugins/base_pack/* \
-            source_plugins/non_catalog_apps/*; do
-            [ -e "$d" ] || continue
-            cp -R "$d" applications_user/
-          done
+          # jeśli chcesz mieć w środku trzy podkatalogi, użyj CP poniżej:
+          cp -R source_plugins/apps_source_code \
+                source_plugins/base_pack \
+                source_plugins/non_catalog_apps \
+                applications_user/
+          echo "After copy tree:"
+          ls -la applications_user || true
 
       - name: Commit if changed
         shell: bash
         run: |
+          set -euo pipefail
           git config user.name  "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           if ! git diff --quiet; then
             git add -A
-            git commit -m "Auto-sync from all-the-plugins → applications_user"
+            git commit -m "Auto-sync: apps_source_code, base_pack, non_catalog_apps → applications_user"
           else
-            echo "No changes."
+            echo "No changes to commit."
           fi
 
       - name: Push
-        run: git push origin dev
+        run: |
+          git push origin ${{ steps.resolve.outputs.branch }}
