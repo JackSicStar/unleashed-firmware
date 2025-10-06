@@ -1,31 +1,35 @@
 name: Sync all-the-plugins → applications_user
 
 on:
-  workflow_dispatch: {}          # ręczne uruchamianie z zakładki Actions
+  # ręcznie z Actions
+  workflow_dispatch: {}
+  # auto: nasłuch na event z drugiego repo
+  repository_dispatch:
+    types: [sync-plugins]
+  # opcjonalnie: safety-net raz dziennie
   schedule:
-    - cron: "15 4 * * *"        # (opcjonalnie) codziennie 04:15 UTC
+    - cron: "15 4 * * *"
+
+permissions:
+  contents: write
 
 jobs:
   sync:
     runs-on: ubuntu-latest
     steps:
-      # 1) Checkout celu (Twoje unleashed-firmware/dev)
-      - name: Checkout target repo (unleashed-firmware)
+      - name: Checkout target (unleashed-firmware@dev)
         uses: actions/checkout@v4
         with:
           ref: dev
 
-      # 2) Checkout źródła (all-the-plugins/dev) do podkatalogu source_plugins
-      - name: Checkout source repo (all-the-plugins)
+      - name: Checkout source (all-the-plugins@dev)
         uses: actions/checkout@v4
         with:
           repository: JackSicStar/all-the-plugins
           ref: dev
           path: source_plugins
 
-      # 3) Skopiuj ZAWARTOŚĆ trzech folderów do applications_user
-      #    Kopiujemy dzieci (podfoldery/apki), nie sam katalog-ramkę
-      - name: Copy plugins into applications_user
+      - name: Copy apps into applications_user
         shell: bash
         run: |
           set -euo pipefail
@@ -35,26 +39,21 @@ jobs:
             source_plugins/apps_source_code/* \
             source_plugins/base_pack/* \
             source_plugins/non_catalog_apps/*; do
-            # jeżeli pusty glob – pomiń
             [ -e "$d" ] || continue
             cp -R "$d" applications_user/
           done
 
-      # 4) Commit tylko gdy są zmiany
-      - name: Commit changes if any
+      - name: Commit if changed
         shell: bash
         run: |
           git config user.name  "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           if ! git diff --quiet; then
             git add -A
-            git commit -m "Sync plugins from all-the-plugins (apps_source_code, base_pack, non_catalog_apps) → applications_user"
+            git commit -m "Auto-sync from all-the-plugins → applications_user"
           else
-            echo "No changes to commit."
+            echo "No changes."
           fi
 
-      # 5) Push na dev
       - name: Push
-        if: success()
-        run: |
-          git push origin dev
+        run: git push origin dev
