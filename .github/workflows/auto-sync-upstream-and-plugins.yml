@@ -63,11 +63,17 @@ jobs:
           ref: unl_dev_all_apps
           fetch-depth: 0
 
+      # ==== FIX 1: wyrównaj lokalną gałąź do zdalnej ====
+      - name: Sync local branch with remote (avoid non-ff)
+        run: |
+          git fetch origin unl_dev_all_apps
+          git reset --hard origin/unl_dev_all_apps
+
       - name: Checkout plugins source @ dev
         uses: actions/checkout@v4
         with:
-          repository: ${{ env.SOURCE_PLUGINS_REPO }}
-          ref: ${{ env.SOURCE_BRANCH }}
+          repository: JackSicStar/all-the-plugins
+          ref: dev
           path: source_plugins
           fetch-depth: 0
 
@@ -89,6 +95,14 @@ jobs:
       - name: Write sync stamp
         run: date -u +"%Y-%m-%dT%H:%M:%SZ" > applications_user/.syncstamp
 
+      # ==== FIX 2: usuń tymczasowe repo, nie rób z niego submodule ====
+      - name: Remove temporary checkout to avoid submodule
+        run: |
+          rm -rf source_plugins
+          git rm -f --cached source_plugins 2>/dev/null || true
+          git config -f .gitmodules --remove-section submodule.source_plugins 2>/dev/null || true
+          test -f .gitmodules && git add .gitmodules || true
+
       - name: Commit & push if changed
         run: |
           git config user.name  "github-actions[bot]"
@@ -97,6 +111,6 @@ jobs:
           if git diff --cached --quiet; then
             echo "No changes to commit."
           else
-            git commit -m "Auto-sync upstream + flat copy of plugins into applications_user"
+            git commit -m "[unl_dev_all_apps] Auto-sync upstream + flat copy of plugins into applications_user"
             git push origin unl_dev_all_apps
           fi
