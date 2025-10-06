@@ -1,40 +1,23 @@
-name: Sync all-the-plugins → applications_user
+name: Sync ALL plugins -> applications_user (flat)
 
 on:
   workflow_dispatch: {}
-  repository_dispatch:
-    types: [sync-plugins]
 
 permissions:
   contents: write
-
-env:
-  DEFAULT_TARGET_BRANCH: unl_dev_all_apps
 
 jobs:
   sync:
     runs-on: ubuntu-latest
     steps:
-      - name: Resolve target branch
-        id: resolve
-        run: |
-          # 1) repo_dispatch może podać branch
-          if [ -n "${{ github.event.client_payload.branch }}" ]; then
-            echo "branch=${{ github.event.client_payload.branch }}" >> $GITHUB_OUTPUT
-          # 2) jeśli ręcznie z Actions – użyj aktualnej gałęzi workflowa
-          elif [ "${{ github.ref_type }}" = "branch" ]; then
-            echo "branch=${{ github.ref_name }}" >> $GITHUB_OUTPUT
-          else
-            echo "branch=${DEFAULT_TARGET_BRANCH}" >> $GITHUB_OUTPUT
-          fi
-          echo "Target branch -> ${{ steps.resolve.outputs.branch }}"
-
-      - name: Checkout target (unleashed-firmware)
+      # Cel: TA GAŁĄŹ (unl_dev_all_apps)
+      - name: Checkout target (unleashed-firmware@unl_dev_all_apps)
         uses: actions/checkout@v4
         with:
-          ref: ${{ steps.resolve.outputs.branch }}
+          ref: unl_dev_all_apps
           fetch-depth: 0
 
+      # Źródło: all-the-plugins@dev do podkatalogu source_plugins
       - name: Checkout source (all-the-plugins@dev)
         uses: actions/checkout@v4
         with:
@@ -43,28 +26,36 @@ jobs:
           path: source_plugins
           fetch-depth: 0
 
-      - name: Debug list of sources
+      # Debug: pokaż co realnie mamy w źródłach
+      - name: Debug source trees
         run: |
-          echo "apps_source_code:" && ls -la source_plugins/apps_source_code || true
-          echo "base_pack:" && ls -la source_plugins/base_pack || true
-          echo "non_catalog_apps:" && ls -la source_plugins/non_catalog_apps || true
+          echo "=== apps_source_code ==="; ls -laR source_plugins/apps_source_code || true
+          echo "=== base_pack ===";       ls -laR source_plugins/base_pack || true
+          echo "=== non_catalog_apps ===";ls -laR source_plugins/non_catalog_apps || true
 
-      - name: Prepare applications_user (remove ignore)
+      # Przygotuj cel: usuń starego killera
+      - name: Prepare target
         run: |
           mkdir -p applications_user
           rm -f applications_user/.gitignore
-          echo "applications_user before copy:" && ls -la applications_user || true
+          echo "=== TARGET before copy ==="; ls -la applications_user || true
 
-      - name: Copy apps
+      # KOPIOWANIE NA PŁASKO do applications_user/
+      - name: Copy flat into applications_user
         run: |
           set -euo pipefail
-          cp -R source_plugins/apps_source_code \
-                source_plugins/base_pack \
-                source_plugins/non_catalog_apps \
-                applications_user/
-          echo "applications_user after copy:" && ls -la applications_user || true
+          shopt -s dotglob nullglob
+          cp -a source_plugins/apps_source_code/*  applications_user/ 2>/dev/null || true
+          cp -a source_plugins/base_pack/*         applications_user/ 2>/dev/null || true
+          cp -a source_plugins/non_catalog_apps/*  applications_user/ 2>/dev/null || true
+          echo "=== TARGET after copy ==="; ls -la applications_user || true
 
-      - name: Commit if changed
+      # Znacznik, by commit był widoczny nawet gdy źródło puste
+      - name: Write sync stamp
+        run: date -u +"%Y-%m-%dT%H:%M:%SZ" > applications_user/.syncstamp
+
+      # Commit & push
+      - name: Commit & push if changed
         run: |
           git config user.name  "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
@@ -72,6 +63,6 @@ jobs:
           if git diff --cached --quiet; then
             echo "No changes to commit."
           else
-            git commit -m "Auto-sync plugins → applications_user"
-            git push origin ${{ steps.resolve.outputs.branch }}
+            git commit -m "Sync plugins (flat) from all-the-plugins → applications_user"
+            git push origin unl_dev_all_apps
           fi
