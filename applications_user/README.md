@@ -1,1 +1,2 @@
-Put your custom applications in this folder.
+# non_catalog_apps
+Non-catalog experimental apps folder
