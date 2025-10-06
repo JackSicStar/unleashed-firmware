@@ -1,0 +1,98 @@
+name: Auto-sync upstream + copy plugins (flat)
+
+on:
+  schedule:
+    - cron: "0 3 * * *"   # co noc (zmień jak chcesz)
+  workflow_dispatch: {}
+  repository_dispatch:
+    types: [sync-plugins] # trigger z all-the-plugins
+
+permissions:
+  contents: write
+  pull-requests: write
+
+env:
+  UPSTREAM_REPO: DarkFlippers/unleashed-firmware   # skąd się syncujemy
+  SOURCE_PLUGINS_REPO: JackSicStar/all-the-plugins # skąd bierzemy appki
+  SOURCE_BRANCH: dev
+  TARGET_BRANCHES: dev,unl_dev_all_apps            # które gałęzie forka aktualizować
+
+jobs:
+  sync_fork:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        branch: [dev, unl_dev_all_apps]
+    steps:
+      - name: Checkout fork @ ${{ matrix.branch }}
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ matrix.branch }}
+          fetch-depth: 0
+
+      - name: Add & fetch upstream
+        run: |
+          git remote add upstream https://github.com/${{ env.UPSTREAM_REPO }}.git
+          git fetch upstream
+
+      - name: Merge upstream/dev -> ${{ matrix.branch }}
+        run: |
+          set -e
+          git checkout ${{ matrix.branch }}
+          git merge --no-edit upstream/dev || true
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          # wypchnij tylko jeśli są zmiany
+          if ! git diff --quiet --exit-code origin/${{ matrix.branch }}..HEAD; then
+            git push origin ${{ matrix.branch }}
+          else
+            echo "No upstream changes for ${{ matrix.branch }}"
+          fi
+
+  copy_plugins_flat:
+    needs: sync_fork
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout fork @ unl_dev_all_apps
+        uses: actions/checkout@v4
+        with:
+          ref: unl_dev_all_apps
+          fetch-depth: 0
+
+      - name: Checkout plugins source
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.SOURCE_PLUGINS_REPO }}
+          ref: ${{ env.SOURCE_BRANCH }}
+          path: source_plugins
+          fetch-depth: 0
+
+      - name: Prepare target (remove ignore)
+        run: |
+          mkdir -p applications_user
+          rm -f applications_user/.gitignore
+          echo "Before copy:"; ls -la applications_user || true
+
+      - name: Copy FLAT into applications_user
+        run: |
+          set -euo pipefail
+          shopt -s dotglob nullglob
+          cp -a source_plugins/apps_source_code/*  applications_user/ 2>/dev/null || true
+          cp -a source_plugins/base_pack/*         applications_user/ 2>/dev/null || true
+          cp -a source_plugins/non_catalog_apps/*  applications_user/ 2>/dev/null || true
+          echo "After copy:"; ls -la applications_user || true
+
+      - name: Write sync stamp (for visibility)
+        run: date -u +"%Y-%m-%dT%H:%M:%SZ" > applications_user/.syncstamp
+
+      - name: Commit & push if changed
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          if git diff --cached --quiet; then
+            echo "No changes to commit."
+          else
+            git commit -m "Auto-sync upstream + flat copy of plugins into applications_user"
+            git push origin unl_dev_all_apps
+          fi
