@@ -9,24 +9,27 @@ permissions:
   contents: write
 
 env:
-  # Domyślna gałąź docelowa (zmienisz eventem repo_dispatch)
-  TARGET_BRANCH: unl_dev_all_apps
+  DEFAULT_TARGET_BRANCH: unl_dev_all_apps
 
 jobs:
   sync:
     runs-on: ubuntu-latest
     steps:
-      - name: Resolve target branch from dispatch payload
+      - name: Resolve target branch
         id: resolve
         run: |
-          # jeśli przyszło z repository_dispatch, weź branch z payloadu
+          # 1) repo_dispatch może podać branch
           if [ -n "${{ github.event.client_payload.branch }}" ]; then
             echo "branch=${{ github.event.client_payload.branch }}" >> $GITHUB_OUTPUT
+          # 2) jeśli ręcznie z Actions – użyj aktualnej gałęzi workflowa
+          elif [ "${{ github.ref_type }}" = "branch" ]; then
+            echo "branch=${{ github.ref_name }}" >> $GITHUB_OUTPUT
           else
-            echo "branch=${TARGET_BRANCH}" >> $GITHUB_OUTPUT
+            echo "branch=${DEFAULT_TARGET_BRANCH}" >> $GITHUB_OUTPUT
           fi
+          echo "Target branch -> ${{ steps.resolve.outputs.branch }}"
 
-      - name: Checkout target (unleashed-firmware@${{ steps.resolve.outputs.branch }})
+      - name: Checkout target (unleashed-firmware)
         uses: actions/checkout@v4
         with:
           ref: ${{ steps.resolve.outputs.branch }}
@@ -40,40 +43,35 @@ jobs:
           path: source_plugins
           fetch-depth: 0
 
-      - name: Prepare applications_user
-        shell: bash
+      - name: Debug list of sources
         run: |
-          set -euo pipefail
-          mkdir -p applications_user
-          # KILLER: usuń .gitignore, który blokuje śledzenie plików
-          rm -f applications_user/.gitignore
+          echo "apps_source_code:" && ls -la source_plugins/apps_source_code || true
+          echo "base_pack:" && ls -la source_plugins/base_pack || true
+          echo "non_catalog_apps:" && ls -la source_plugins/non_catalog_apps || true
 
-      - name: Copy apps into applications_user
-        shell: bash
+      - name: Prepare applications_user (remove ignore)
+        run: |
+          mkdir -p applications_user
+          rm -f applications_user/.gitignore
+          echo "applications_user before copy:" && ls -la applications_user || true
+
+      - name: Copy apps
         run: |
           set -euo pipefail
-          shopt -s dotglob nullglob
-          # jeśli chcesz mieć w środku trzy podkatalogi, użyj CP poniżej:
           cp -R source_plugins/apps_source_code \
                 source_plugins/base_pack \
                 source_plugins/non_catalog_apps \
                 applications_user/
-          echo "After copy tree:"
-          ls -la applications_user || true
+          echo "applications_user after copy:" && ls -la applications_user || true
 
       - name: Commit if changed
-        shell: bash
         run: |
-          set -euo pipefail
           git config user.name  "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          if ! git diff --quiet; then
-            git add -A
-            git commit -m "Auto-sync: apps_source_code, base_pack, non_catalog_apps → applications_user"
-          else
+          git add -A
+          if git diff --cached --quiet; then
             echo "No changes to commit."
+          else
+            git commit -m "Auto-sync plugins → applications_user"
+            git push origin ${{ steps.resolve.outputs.branch }}
           fi
-
-      - name: Push
-        run: |
-          git push origin ${{ steps.resolve.outputs.branch }}
