@@ -10,14 +10,14 @@ jobs:
   sync:
     runs-on: ubuntu-latest
     steps:
-      # Cel: TA GAŁĄŹ (unl_dev_all_apps)
+      # 1) Checkout celu: unl_dev_all_apps (pełna historia, żeby rebase działał)
       - name: Checkout target (unleashed-firmware@unl_dev_all_apps)
         uses: actions/checkout@v4
         with:
           ref: unl_dev_all_apps
           fetch-depth: 0
 
-      # Źródło: all-the-plugins@dev do podkatalogu source_plugins
+      # 2) Checkout źródła do PODKATALOGU (osobna kopia robocza)
       - name: Checkout source (all-the-plugins@dev)
         uses: actions/checkout@v4
         with:
@@ -26,21 +26,24 @@ jobs:
           path: source_plugins
           fetch-depth: 0
 
-      # Debug: pokaż co realnie mamy w źródłach
+      # 3) Debug (opcjonalnie)
       - name: Debug source trees
         run: |
           echo "=== apps_source_code ==="; ls -laR source_plugins/apps_source_code || true
           echo "=== base_pack ===";       ls -laR source_plugins/base_pack || true
           echo "=== non_catalog_apps ===";ls -laR source_plugins/non_catalog_apps || true
 
-      # Przygotuj cel: usuń starego killera
+      # 4) Przygotuj target i .gitignore, żeby NIGDY nie dodać source_plugins do commita
       - name: Prepare target
         run: |
+          set -euo pipefail
           mkdir -p applications_user
           rm -f applications_user/.gitignore
+          echo "source_plugins/" >> .gitignore
+          echo "" >> .gitignore
           echo "=== TARGET before copy ==="; ls -la applications_user || true
 
-      # KOPIOWANIE NA PŁASKO do applications_user/
+      # 5) Kopiowanie NA PŁASKO do applications_user/
       - name: Copy flat into applications_user
         run: |
           set -euo pipefail
@@ -50,19 +53,38 @@ jobs:
           cp -a source_plugins/non_catalog_apps/*  applications_user/ 2>/dev/null || true
           echo "=== TARGET after copy ==="; ls -la applications_user || true
 
-      # Znacznik, by commit był widoczny nawet gdy źródło puste
+      # 6) Usuń źródło, żeby nie kusiło Gita do dodania gitlinka
+      - name: Drop working source directory (avoid submodule gitlink)
+        run: |
+          rm -rf source_plugins
+
+      # 7) Znacznik synchronizacji
       - name: Write sync stamp
         run: date -u +"%Y-%m-%dT%H:%M:%SZ" > applications_user/.syncstamp
 
-      # Commit & push
+      # 8) Commit + rebase + push (bez konfliktów i bez submodułu)
       - name: Commit & push if changed
         run: |
+          set -euo pipefail
           git config user.name  "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git config pull.rebase true
+
+          # Upewnij się, że mamy najświeższy tip gałęzi
+          git fetch origin unl_dev_all_apps
+          git checkout unl_dev_all_apps
+          git reset --mixed origin/unl_dev_all_apps
+
           git add -A
           if git diff --cached --quiet; then
             echo "No changes to commit."
-          else
-            git commit -m "Sync plugins (flat) from all-the-plugins → applications_user"
-            git push origin unl_dev_all_apps
+            exit 0
           fi
+
+          git commit -m "Sync plugins (flat) from all-the-plugins → applications_user"
+
+          # Gdy ktoś w międzyczasie pchnął — pobierz i zrebasuj
+          git pull --rebase origin unl_dev_all_apps || true
+
+          # Ostrożny push z ochroną przed nadpisaniem
+          git push --force-with-lease origin HEAD:unl_dev_all_apps
