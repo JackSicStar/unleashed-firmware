@@ -2,27 +2,26 @@ name: Auto-sync upstream + copy plugins (flat)
 
 on:
   schedule:
-    - cron: "0 3 * * *"   # co noc (zmień jak chcesz)
-  workflow_dispatch: {}
+    - cron: "0 */12 * * *"     # co 12 godzin
+  workflow_dispatch: {}         # odpal ręcznie gdy chcesz
   repository_dispatch:
-    types: [sync-plugins] # trigger z all-the-plugins
+    types: [sync-plugins]       # trigger z all-the-plugins
 
 permissions:
   contents: write
   pull-requests: write
 
 env:
-  UPSTREAM_REPO: DarkFlippers/unleashed-firmware   # skąd się syncujemy
-  SOURCE_PLUGINS_REPO: JackSicStar/all-the-plugins # skąd bierzemy appki
+  UPSTREAM_REPO: DarkFlippers/unleashed-firmware
+  SOURCE_PLUGINS_REPO: JackSicStar/all-the-plugins
   SOURCE_BRANCH: dev
-  TARGET_BRANCHES: dev,unl_dev_all_apps            # które gałęzie forka aktualizować
 
 jobs:
+  # 1) zaciągnij upstream/dev do dev i unl_dev_all_apps w Twoim forku
   sync_fork:
     runs-on: ubuntu-latest
     strategy:
-      matrix:
-        branch: [dev, unl_dev_all_apps]
+      matrix: { branch: [dev, unl_dev_all_apps] }
     steps:
       - name: Checkout fork @ ${{ matrix.branch }}
         uses: actions/checkout@v4
@@ -33,22 +32,27 @@ jobs:
       - name: Add & fetch upstream
         run: |
           git remote add upstream https://github.com/${{ env.UPSTREAM_REPO }}.git
-          git fetch upstream
+          git fetch upstream dev
 
       - name: Merge upstream/dev -> ${{ matrix.branch }}
         run: |
           set -e
           git checkout ${{ matrix.branch }}
-          git merge --no-edit upstream/dev || true
-          git config user.name  "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          # wypchnij tylko jeśli są zmiany
-          if ! git diff --quiet --exit-code origin/${{ matrix.branch }}..HEAD; then
-            git push origin ${{ matrix.branch }}
+          # Spróbuj bez konfliktów; gdyby konflikt, nie psuj joba – otworzymy PR
+          if git merge --no-edit upstream/dev; then
+            CHANGED=$(git rev-list --count origin/${{ matrix.branch }}..HEAD)
+            if [ "$CHANGED" != "0" ]; then
+              git config user.name  "github-actions[bot]"
+              git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+              git push origin ${{ matrix.branch }}
+            else
+              echo "No upstream changes for ${{ matrix.branch }}"
+            fi
           else
-            echo "No upstream changes for ${{ matrix.branch }}"
+            echo "::set-output name=need_pr::true"
           fi
 
+  # 2) po syncu: skopiuj appki NA PŁASKO do applications_user/ na unl_dev_all_apps
   copy_plugins_flat:
     needs: sync_fork
     runs-on: ubuntu-latest
@@ -59,7 +63,7 @@ jobs:
           ref: unl_dev_all_apps
           fetch-depth: 0
 
-      - name: Checkout plugins source
+      - name: Checkout plugins source @ dev
         uses: actions/checkout@v4
         with:
           repository: ${{ env.SOURCE_PLUGINS_REPO }}
@@ -71,7 +75,7 @@ jobs:
         run: |
           mkdir -p applications_user
           rm -f applications_user/.gitignore
-          echo "Before copy:"; ls -la applications_user || true
+          echo "=== TARGET before ==="; ls -la applications_user || true
 
       - name: Copy FLAT into applications_user
         run: |
@@ -80,9 +84,9 @@ jobs:
           cp -a source_plugins/apps_source_code/*  applications_user/ 2>/dev/null || true
           cp -a source_plugins/base_pack/*         applications_user/ 2>/dev/null || true
           cp -a source_plugins/non_catalog_apps/*  applications_user/ 2>/dev/null || true
-          echo "After copy:"; ls -la applications_user || true
+          echo "=== TARGET after ==="; ls -la applications_user || true
 
-      - name: Write sync stamp (for visibility)
+      - name: Write sync stamp
         run: date -u +"%Y-%m-%dT%H:%M:%SZ" > applications_user/.syncstamp
 
       - name: Commit & push if changed
